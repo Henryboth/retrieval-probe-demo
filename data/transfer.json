@@ -1,0 +1,106 @@
+{
+  "feature_order": [
+    "f_chunk_completeness",
+    "f_n_retrieved_ratio",
+    "f_score_mean",
+    "f_semantic_coverage",
+    "f_semantic_variance",
+    "f_top1_similarity",
+    "f_entity_coverage",
+    "f_entity_density",
+    "f_score_gap",
+    "f_score_concentration",
+    "f_query_length_norm",
+    "f_query_entity_count"
+  ],
+  "xgb_params": {
+    "n_estimators": 200,
+    "max_depth": 4,
+    "learning_rate": 0.1,
+    "random_state": 42,
+    "verbosity": 0
+  },
+  "models": {
+    "detector": {
+      "target": "all_failed",
+      "trained_on": [
+        "musique",
+        "quality",
+        "ultraDomain_legal"
+      ],
+      "in_corpus_auc": {
+        "musique": 0.894,
+        "quality": 0.803,
+        "ultraDomain_legal": 0.71
+      },
+      "leave_one_corpus_out": {
+        "musique": {
+          "auc": 0.859,
+          "recall_at_precision_0.80": 0.584
+        },
+        "quality": {
+          "auc": 0.745,
+          "recall_at_precision_0.80": 0.0
+        },
+        "ultraDomain_legal": {
+          "auc": 0.622,
+          "recall_at_precision_0.80": 0.0
+        }
+      },
+      "pairwise_transfer_auc": {
+        "musique->quality": 0.751,
+        "musique->ultraDomain_legal": 0.627,
+        "quality->musique": 0.852,
+        "quality->ultraDomain_legal": 0.667,
+        "ultraDomain_legal->musique": 0.827,
+        "ultraDomain_legal->quality": 0.669
+      },
+      "unseen_corpus_auc_range": [
+        0.622,
+        0.859
+      ],
+      "is_of_record": true
+    },
+    "gate_pq": {
+      "target": "routing_matters",
+      "trained_on": [
+        "musique",
+        "quality",
+        "ultraDomain_legal"
+      ],
+      "in_corpus_auc": {
+        "musique": 0.714,
+        "quality": 0.662,
+        "ultraDomain_legal": 0.714
+      },
+      "leave_one_corpus_out": {
+        "musique": {
+          "auc": 0.622,
+          "recall_at_precision_0.80": 0.0
+        },
+        "quality": {
+          "auc": 0.575,
+          "recall_at_precision_0.80": 0.0
+        },
+        "ultraDomain_legal": {
+          "auc": 0.554,
+          "recall_at_precision_0.80": 0.0
+        }
+      },
+      "pairwise_transfer_auc": {
+        "musique->quality": 0.546,
+        "musique->ultraDomain_legal": 0.491,
+        "quality->musique": 0.636,
+        "quality->ultraDomain_legal": 0.554,
+        "ultraDomain_legal->musique": 0.498,
+        "ultraDomain_legal->quality": 0.509
+      },
+      "unseen_corpus_auc_range": [
+        0.554,
+        0.622
+      ],
+      "is_of_record": false
+    }
+  },
+  "note": "Leave-one-corpus-out is the honest estimate for a corpus the model has not seen. The detector keeps most of its ranking ability across corpora; its recall at precision 0.80 does not transfer, so a transferred detector ranks candidates but cannot flag failures at a precision worth acting on. gate_pq is a probe-only variant, not the gate of record."
+}

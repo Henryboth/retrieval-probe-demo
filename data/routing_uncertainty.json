@@ -1,0 +1,156 @@
+{
+  "quality": {
+    "dataset": "quality",
+    "n_instances": 47920,
+    "naive_ndcg_mean": 0.3781,
+    "naive_ndcg_variance": 0.1543,
+    "norm_variance": 1.0,
+    "paradigm_entropy": 0.5437,
+    "norm_entropy": 0.4949,
+    "quality_degradation_slope": 0.1771,
+    "norm_quality_sensitivity": 0.3543,
+    "probe_discriminability_auc": 0.5596,
+    "norm_discriminability": 0.1192,
+    "routing_opportunity": 0.3802,
+    "routing_opportunity_3c": 0.5597,
+    "paradigm_win_rates": {
+      "graph": 0.0565,
+      "hybrid": 0.1036,
+      "naive": 0.8399
+    },
+    "indomain_pq_gain": -0.0004,
+    "received_transfer": {
+      "musique": 0.0008,
+      "ultraDomain_legal": 0.0019
+    },
+    "mean_received_transfer": 0.0014
+  },
+  "musique": {
+    "dataset": "musique",
+    "n_instances": 19920,
+    "naive_ndcg_mean": 0.4288,
+    "naive_ndcg_variance": 0.1739,
+    "norm_variance": 0.946,
+    "paradigm_entropy": 0.2752,
+    "norm_entropy": 0.2505,
+    "quality_degradation_slope": 0.166,
+    "norm_quality_sensitivity": 0.332,
+    "probe_discriminability_auc": 0.6288,
+    "norm_discriminability": 0.2577,
+    "routing_opportunity": 0.3773,
+    "routing_opportunity_3c": 0.4285,
+    "paradigm_win_rates": {
+      "graph": 0.0352,
+      "hybrid": 0.0269,
+      "naive": 0.9379
+    },
+    "indomain_pq_gain": -0.0006,
+    "received_transfer": {
+      "quality": -0.0032,
+      "ultraDomain_legal": 0.0058
+    },
+    "mean_received_transfer": 0.0013
+  },
+  "ultraDomain_legal": {
+    "dataset": "ultraDomain_legal",
+    "n_instances": 51080,
+    "naive_ndcg_mean": 0.3297,
+    "naive_ndcg_variance": 0.1353,
+    "norm_variance": 1.0,
+    "paradigm_entropy": 0.865,
+    "norm_entropy": 0.7874,
+    "quality_degradation_slope": 0.1688,
+    "norm_quality_sensitivity": 0.3376,
+    "probe_discriminability_auc": 0.6179,
+    "norm_discriminability": 0.2359,
+    "routing_opportunity": 0.5004,
+    "routing_opportunity_3c": 0.643,
+    "paradigm_win_rates": {
+      "graph": 0.1756,
+      "hybrid": 0.1563,
+      "naive": 0.6681
+    },
+    "indomain_pq_gain": -0.0033,
+    "received_transfer": {
+      "quality": 0.0003,
+      "musique": 0.0011
+    },
+    "mean_received_transfer": 0.0007
+  },
+  "correlation_opportunity_vs_indomain_gain": -0.9966,
+  "omega_correlation_table": {
+    "datasets_order": [
+      "quality",
+      "musique",
+      "ultraDomain_legal"
+    ],
+    "omega": [
+      0.3802,
+      0.3773,
+      0.5004
+    ],
+    "oracle_gap": {
+      "values": [
+        0.0442,
+        0.0155,
+        0.0906
+      ],
+      "pearson_r_with_omega": 0.9332,
+      "omega_rank_matches": true
+    },
+    "pq_gain_classifier": {
+      "values": [
+        -0.0004,
+        -0.0006,
+        -0.0033
+      ],
+      "pearson_r_with_omega": -0.9966,
+      "omega_rank_matches": false
+    },
+    "total_gain_classifier_pq": {
+      "values": [
+        -0.0004,
+        -0.0006,
+        0.0113
+      ],
+      "pearson_r_with_omega": 1.0,
+      "omega_rank_matches": true
+    },
+    "static_tier_gain": {
+      "values": [
+        0.0,
+        0.0,
+        0.0148
+      ],
+      "pearson_r_with_omega": 0.9998,
+      "omega_rank_matches": false
+    },
+    "ra_gain_over_qonly_ev": {
+      "values": [
+        0.0027,
+        -0.005,
+        0.0036
+      ],
+      "pearson_r_with_omega": 0.5969,
+      "omega_rank_matches": true
+    },
+    "ra_gain_over_static_ev": {
+      "values": [
+        0.002,
+        -0.005,
+        0.0036
+      ],
+      "pearson_r_with_omega": 0.6594,
+      "omega_rank_matches": true
+    },
+    "ra_gain_over_best_fixed_ev": {
+      "values": [
+        0.0042,
+        -0.0044,
+        0.0083
+      ],
+      "pearson_r_with_omega": 0.7618,
+      "omega_rank_matches": true
+    }
+  }
+}
