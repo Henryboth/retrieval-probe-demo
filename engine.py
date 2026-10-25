@@ -38,7 +38,10 @@ from pathlib import Path
 import numpy as np
 
 DEMO = Path(__file__).resolve().parent
-CODE = DEMO.parent / "code"
+# In the published bundle the project's modules and one corpus travel under
+# vendor/. On this machine there is no vendor/, so the research tree is used
+# exactly as before.
+CODE = DEMO / "vendor" if (DEMO / "vendor").is_dir() else DEMO.parent / "code"
 USER_CORPORA = DEMO / "corpora"
 BENCHMARKS = ["quality", "musique", "ultraDomain_legal"]
 
@@ -147,8 +150,15 @@ def list_user_corpora() -> list[str]:
                   if (p / "ProcessedData" / "Index" / p.name / "index.faiss").exists())
 
 
+def available_benchmarks() -> list[str]:
+    """Benchmarks whose index is present. All three on the research machine;
+    only the bundled one in the published copy."""
+    return [c for c in BENCHMARKS
+            if (corpus_root(c) / "ProcessedData" / "Index" / c / "index.faiss").exists()]
+
+
 def corpus_is_ready(name: str) -> bool:
-    return name in BENCHMARKS or name in list_user_corpora()
+    return name in available_benchmarks() or name in list_user_corpora()
 
 
 @dataclass

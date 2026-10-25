@@ -1,0 +1,209 @@
+"""
+PerQueryDo.py
+=============
+Computes a 12-dimensional per-query retrieval quality feature vector.
+
+Unlike corpus-level quality features — which are constant for every query
+within a degradation condition — per-query features capture how well each
+individual retrieval attempt served the specific question asked.
+
+This enables a cascade routing strategy: run naive RAG as a cheap probe,
+compute per-query features on its results, then decide whether to escalate
+to a more expensive paradigm.
+
+Feature vector layout (12 dimensions)
+--------------------------------------
+Retrieval completeness  (3)
+  [0]  chunk_completeness    -- mean chunk chars / corpus mean chunk chars
+  [1]  n_retrieved_ratio     -- chunks returned / chunks requested (top_k)
+  [2]  score_mean            -- mean retrieval score of top-k results
+
+Semantic fit            (3)
+  [3]  semantic_coverage     -- cosine sim(query_emb, mean(top5 chunk embs))
+  [4]  semantic_variance     -- variance of per-chunk cosine similarities
+  [5]  top1_similarity       -- cosine sim of single best chunk to query
+
+Entity fit              (2)
+  [6]  entity_coverage       -- fraction of query entities found in top-5 chunks
+  [7]  entity_density        -- mean entity-like tokens per chunk (normalised)
+
+Retrieval confidence    (2)
+  [8]  score_gap             -- score[0] - score[k-1]
+  [9]  score_concentration   -- score[0] / (sum of all scores)
+
+Query difficulty        (2)
+  [10] query_length_norm     -- query word count / 30 (capped 1.0)
+  [11] query_entity_count    -- entity sequences in query / 10 (capped 1.0)
+
+All features are in [0, 1]. Missing values (empty retrieval, no entities)
+default to 0.0 so the router sees a clear "nothing retrieved" signal.
+"""
+
+from __future__ import annotations
+
+import re
+from typing import List, Optional
+
+import numpy as np
+
+
+# ── Entity pattern (same as DegradationDo and QualityAssessorDo) ────────────
+_ENTITY_RE = re.compile(r"\b([A-Z][a-zA-Z]*)(?:\s+[A-Z][a-zA-Z]*){0,3}\b")
+
+FEATURE_NAMES = [
+    "chunk_completeness",
+    "n_retrieved_ratio",
+    "score_mean",
+    "semantic_coverage",
+    "semantic_variance",
+    "top1_similarity",
+    "entity_coverage",
+    "entity_density",
+    "score_gap",
+    "score_concentration",
+    "query_length_norm",
+    "query_entity_count",
+]
+N_FEATURES = len(FEATURE_NAMES)
+
+
+def _extract_entities(text: str) -> list:
+    return [m.group(0) for m in _ENTITY_RE.finditer(text) if len(m.group(0)) > 3]
+
+
+class PerQueryAssessor:
+    """
+    Computes the 12-dimensional per-query feature vector for a single
+    (query, retrieved_results) pair.
+
+    Parameters
+    ----------
+    embedder : EmbeddingProcessor
+        The same embedder used for retrieval — reused to embed chunk texts.
+    corpus_mean_chars : float
+        Mean character length of chunks in the current (possibly degraded)
+        corpus. Used to normalise chunk_completeness.
+    top_k : int
+        Number of chunks requested from the retriever (default 10).
+    """
+
+    def __init__(self, embedder, corpus_mean_chars: float, top_k: int = 10):
+        self.embedder         = embedder
+        self.corpus_mean_chars = max(corpus_mean_chars, 1.0)
+        self.top_k            = top_k
+
+    def compute(
+        self,
+        query: str,
+        query_emb: np.ndarray,          # shape (dim,), already L2-normalised
+        retrieved: list,                 # list of {"doc_id", "text"?, "score"}
+        docid_to_text: Optional[dict] = None,
+    ) -> dict:
+        """
+        Parameters
+        ----------
+        query       : raw question string
+        query_emb   : pre-computed L2-normalised query embedding (1-D)
+        retrieved   : retrieval results (up to top_k items)
+        docid_to_text : fallback lookup {doc_id -> text} for paradigms that
+                        return doc-level results without embedded chunk text
+
+        Returns
+        -------
+        dict mapping each FEATURE_NAME to a float in [0, 1]
+        """
+        if not retrieved:
+            return {name: 0.0 for name in FEATURE_NAMES}
+
+        top5   = retrieved[:5]
+        scores = [float(r.get("score", 0.0)) for r in retrieved]
+
+        # Resolve chunk texts: prefer "text" field, fall back to doc lookup
+        def _text(r):
+            t = r.get("text", "")
+            if not t and docid_to_text:
+                t = docid_to_text.get(str(r.get("doc_id", "")), "")
+            return t
+
+        texts = [_text(r) for r in top5]
+
+        # ── Retrieval completeness ───────────────────────────────────────────
+        char_lens  = [len(t) for t in texts if t]
+        chunk_comp = (np.mean(char_lens) / self.corpus_mean_chars
+                      if char_lens else 0.0)
+        chunk_comp = min(float(chunk_comp), 1.0)
+
+        n_ret_ratio = min(len(retrieved) / max(self.top_k, 1), 1.0)
+        score_mean  = float(np.mean(scores)) if scores else 0.0
+
+        # ── Semantic fit ─────────────────────────────────────────────────────
+        embed_texts = [t for t in texts if t.strip()]
+        if embed_texts and query_emb is not None:
+            try:
+                chunk_embs = self.embedder.embed_texts(embed_texts).astype(np.float32)
+                # L2-normalise
+                norms = np.linalg.norm(chunk_embs, axis=1, keepdims=True)
+                chunk_embs = chunk_embs / np.where(norms == 0, 1.0, norms)
+
+                q = query_emb / max(np.linalg.norm(query_emb), 1e-9)
+                sims = chunk_embs @ q
+                sims = np.clip(sims, 0.0, 1.0)   # cosine in [0,1] after normalisation
+
+                sem_coverage = float(np.mean(sims))
+                sem_variance = float(np.var(sims))
+                top1_sim     = float(np.max(sims))
+            except Exception:
+                sem_coverage = sem_variance = top1_sim = 0.0
+        else:
+            sem_coverage = sem_variance = top1_sim = 0.0
+
+        # ── Entity fit ───────────────────────────────────────────────────────
+        query_entities = set(_extract_entities(query))
+        if query_entities:
+            combined_text = " ".join(texts)
+            found = sum(1 for e in query_entities if e in combined_text)
+            entity_cov = found / len(query_entities)
+        else:
+            entity_cov = 1.0   # no entities to miss → not penalised
+
+        chunk_entity_counts = [len(_extract_entities(t)) for t in texts if t]
+        entity_dens = min(
+            np.mean(chunk_entity_counts) / 10.0 if chunk_entity_counts else 0.0,
+            1.0
+        )
+
+        # ── Retrieval confidence ─────────────────────────────────────────────
+        if len(scores) >= 2:
+            score_gap   = float(scores[0] - scores[-1])
+            score_sum   = sum(scores)
+            score_conc  = float(scores[0] / score_sum) if score_sum > 0 else 0.0
+        else:
+            score_gap  = 0.0
+            score_conc = 1.0 if scores else 0.0
+
+        score_gap  = max(min(score_gap,  1.0), 0.0)
+        score_conc = max(min(score_conc, 1.0), 0.0)
+
+        # ── Query difficulty ─────────────────────────────────────────────────
+        q_len_norm   = min(len(query.split()) / 30.0, 1.0)
+        q_entity_cnt = min(len(query_entities) / 10.0, 1.0)
+
+        return {
+            "chunk_completeness":  chunk_comp,
+            "n_retrieved_ratio":   n_ret_ratio,
+            "score_mean":          score_mean,
+            "semantic_coverage":   sem_coverage,
+            "semantic_variance":   sem_variance,
+            "top1_similarity":     top1_sim,
+            "entity_coverage":     entity_cov,
+            "entity_density":      entity_dens,
+            "score_gap":           score_gap,
+            "score_concentration": score_conc,
+            "query_length_norm":   q_len_norm,
+            "query_entity_count":  q_entity_cnt,
+        }
+
+    def vector(self, features: dict) -> np.ndarray:
+        """Convert feature dict to numpy array in canonical order."""
+        return np.array([features.get(n, 0.0) for n in FEATURE_NAMES],
+                        dtype=np.float32)

@@ -8,9 +8,9 @@ Two components, both established in the thesis:
 Paradigm selection is deliberately absent. The thesis finds the probe cannot tell
 which paradigm will win; see the note in the sidebar.
 
-Every probability shown is out of fold. Run demo/build_data.py first.
+Every probability shown is out of fold.
 
-  demo/.venv/bin/streamlit run demo/app.py
+  streamlit run app.py
 """
 
 from __future__ import annotations
@@ -52,8 +52,7 @@ def load():
 
 
 if not (DATA / "demo.parquet").exists():
-    st.error("demo/data/demo.parquet is missing. Run:  "
-             "/opt/anaconda3/envs/ragBench/bin/python demo/build_data.py")
+    st.error("data/demo.parquet is missing from this copy.")
     st.stop()
 
 df, meta, detector, gate_rec, omega = load()
@@ -194,7 +193,7 @@ with tab_chat:
         import llm
 
         user_corpora = eng.list_user_corpora()
-        options = eng.BENCHMARKS + user_corpora
+        options = eng.available_benchmarks() + user_corpora
 
         head_l, head_r = st.columns([3, 2])
         with head_l:
@@ -395,7 +394,7 @@ with tab_add:
                     st.error(f"Ingestion failed: {type(exc).__name__}: {exc}")
 
         st.caption(
-            "Added corpora are written to demo/corpora/ and never into the research "
+            "Added corpora are written to corpora/ and never into the bundled "
             "data. Note that documents carrying embedded binary — base64 images in "
             "Markdown, for instance — produce chunks of noise that retrieval will "
             "happily return."
@@ -510,7 +509,7 @@ with tab_detector:
               help="Reproduced out-of-fold from the demo table; matches the recorded value.")
     k2.metric("vs query type alone", f"{pooled['D-Q']['auc']:.3f}",
               delta=f"{auc - pooled['D-Q']['auc']:+.3f}")
-    k3.metric("vs top-one similarity", f"{pooled['D-S']['auc']:.3f}",
+    k3.metric("vs static corpus features", f"{pooled['D-S']['auc']:.3f}",
               delta=f"{auc - pooled['D-S']['auc']:+.3f}")
     st.caption(
         f"Prevalence on this corpus: {rec['prevalence']:.1%} of query-condition pairs "

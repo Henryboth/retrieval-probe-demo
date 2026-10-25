@@ -1,0 +1,32 @@
+This bundle contains work from more than one source. All of it is MIT licensed.
+
+Original work, by Henry Bothwell (Stellenbosch University, 2026)
+----------------------------------------------------------------
+  app.py, engine.py, ingest.py, calibrate.py, llm.py   the demonstration app
+  vendor/QualityCore/                                  the twelve per-query probe
+                                                       measurements and the corpus
+                                                       quality vector
+  vendor/Run/Quality/                                  the degradation programme, the
+                                                       evaluation harness, the routers
+                                                       and the routing opportunity score
+  data/                                                the recorded results
+
+From RAGRouter-Bench, by Wang, Zhu, Lin, Xue, Guo and Zhang (2026)
+------------------------------------------------------------------
+  vendor/RAGCore/     retrieval, chunking, embedding, indexing and graph construction
+  vendor/Config/      pipeline configuration
+  (both adapted for Apple Silicon and for the experiments of this project)
+
+  https://github.com/ziqiwang0908/RAGRouter-Bench
+  Wang, Z., Zhu, X., Lin, S., Xue, H., Guo, M. and Zhang, Y. (2026).
+  RAGRouter-Bench: A Dataset and Benchmark for Adaptive RAG Routing.
+  arXiv:2602.00296.
+
+Corpus data
+-----------
+  vendor/Dataset/     the QuALITY split as packaged and released by RAGRouter-Bench
+                      (MIT, per its dataset card). The underlying corpus is QuALITY:
+
+  Pang, R.Y., Parrish, A., Joshi, N., Nangia, N., Phang, J., Chen, A., Padaki, V.,
+  He, H., Cho, K. et al. (2022). QuALITY: Question Answering with Long Input Texts,
+  Yes! NAACL 2022, pages 5336-5358.

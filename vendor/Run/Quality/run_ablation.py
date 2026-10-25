@@ -1,0 +1,293 @@
+"""
+run_ablation.py
+===============
+Ablation study on per-query features for the Q+C+Quality+PQ router.
+
+For each of the 12 per-query features, we drop it (set to zero) and measure
+the drop in correct rate versus the full model. Features that cause the
+largest drop when removed are the most important.
+
+We also test dropping each of the 4 feature groups:
+  - Retrieval completeness (chunk_completeness, n_retrieved_ratio, score_mean)
+  - Semantic fit          (semantic_coverage, semantic_variance, top1_similarity)
+  - Entity fit            (entity_coverage, entity_density)
+  - Retrieval confidence  (score_gap, score_concentration)
+  - Query difficulty      (query_length_norm, query_entity_count)
+
+Output: Dataset/EvaluationData/RouterEval/{dataset}/ablation.json
+"""
+
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+import json
+import argparse
+import numpy as np
+from pathlib import Path
+from collections import defaultdict
+
+from sklearn.preprocessing import LabelEncoder
+from sklearn.model_selection import StratifiedKFold
+from sklearn.metrics import f1_score
+from xgboost import XGBClassifier
+
+# Reuse constants and helpers from run_router_training
+from Run.Quality.run_router_training import (
+    make_splitter, split_iter, ROUTER_OUT_ROOT, fit_expected_value, build_X, PARADIGMS,
+    load_retrieval_results,
+    build_dataset,
+    correct_rate_router,
+    correct_rate_oracle,
+    QUERY_TYPES,
+    CORPUS_FEATURE_NAMES,
+    QUALITY_FEATURE_NAMES,
+    PER_QUERY_FEATURE_NAMES,
+    GP_FEATURE_NAMES,
+)
+
+PQ_GROUPS = {
+    "retrieval_completeness": ["chunk_completeness", "n_retrieved_ratio", "score_mean"],
+    "semantic_fit":           ["semantic_coverage", "semantic_variance", "top1_similarity"],
+    "entity_fit":             ["entity_coverage", "entity_density"],
+    "retrieval_confidence":   ["score_gap", "score_concentration"],
+    "query_difficulty":       ["query_length_norm", "query_entity_count"],
+}
+
+
+def build_X_full(rows: list) -> np.ndarray:
+    parts = []
+    for row in rows:
+        feats = [row["query_vec"], row["corpus_vec"],
+                 row["quality_vec"], row["pq_vec"]]
+        parts.append(np.concatenate(feats))
+    return np.vstack(parts)
+
+
+def build_X_ablate_feature(rows: list, drop_feature: str) -> np.ndarray:
+    idx = PER_QUERY_FEATURE_NAMES.index(drop_feature)
+    parts = []
+    for row in rows:
+        pq = row["pq_vec"].copy()
+        pq[idx] = 0.0
+        feats = [row["query_vec"], row["corpus_vec"], row["quality_vec"], pq]
+        parts.append(np.concatenate(feats))
+    return np.vstack(parts)
+
+
+def build_X_ablate_group(rows: list, drop_features: list) -> np.ndarray:
+    idxs = [PER_QUERY_FEATURE_NAMES.index(f) for f in drop_features]
+    parts = []
+    for row in rows:
+        pq = row["pq_vec"].copy()
+        for i in idxs:
+            pq[i] = 0.0
+        feats = [row["query_vec"], row["corpus_vec"], row["quality_vec"], pq]
+        parts.append(np.concatenate(feats))
+    return np.vstack(parts)
+
+
+def evaluate_X(X: np.ndarray, rows: list) -> float:
+    labels = [r["label"] for r in rows]
+    le = LabelEncoder()
+    y = le.fit_transform(labels)
+
+    skf = make_splitter()
+    fold_crs = []
+
+    for train_idx, val_idx in split_iter(skf, X, y, rows):
+        clf = XGBClassifier(
+            n_estimators=200, max_depth=4, learning_rate=0.1,
+            use_label_encoder=False, eval_metric="mlogloss",
+            random_state=42, verbosity=0,
+        )
+        clf.fit(X[train_idx], y[train_idx])
+        preds = clf.predict(X[val_idx])
+        pred_labels = le.inverse_transform(preds)
+        fold_rows = [rows[i] for i in val_idx]
+        fold_crs.append(correct_rate_router(fold_rows, pred_labels))
+
+    return float(np.mean(fold_crs))
+
+
+def evaluate_X_ev(X: np.ndarray, rows: list) -> float:
+    """Expected-value rule under the same grouped folds (for the retrieve-all selector)."""
+    labels = [r["label"] for r in rows]
+    y = LabelEncoder().fit_transform(labels)
+    skf = make_splitter(); fold_crs = []
+    for train_idx, val_idx in split_iter(skf, X, y, rows):
+        pred_labels, _, _ = fit_expected_value(X[train_idx], [rows[i] for i in train_idx], X[val_idx])
+        fold_crs.append(correct_rate_router([rows[i] for i in val_idx], pred_labels))
+    return float(np.mean(fold_crs))
+
+
+# Retrieve-all selector: column blocks of the Q+C+Quality+RA design matrix
+# (6 query one-hot | 6 corpus | 12 quality | 12 naive | 12 graph | 12 hybrid | 12 diffs)
+RA_BLOCKS = {
+    "naive result set":  list(range(24, 36)),
+    "graph result set":  list(range(36, 48)),
+    "hybrid result set": list(range(48, 60)),
+    "pairwise differences": list(range(60, 72)),
+    "static blocks (Q, C, Quality)": list(range(0, 24)),
+}
+
+
+def run_ablation_ra(dataset_name: str, rows: list) -> dict:
+    """Leave-one-block-out ablation of the retrieve-all expected-value selector."""
+    X_full = build_X(rows, "Q+C+Quality+RA")
+    assert X_full.shape[1] == 72, X_full.shape
+    full_cr = evaluate_X_ev(X_full, rows)
+    print(f"\n  Retrieve-all selector (expected value), full model CR: {full_cr:.4f}")
+    out = {"full_model_cr": round(full_cr, 4), "block_ablation": {}}
+    for name, cols in RA_BLOCKS.items():
+        X_abl = np.delete(X_full, cols, axis=1)
+        abl_cr = evaluate_X_ev(X_abl, rows)
+        drop = full_cr - abl_cr
+        print(f"  drop {name:<32} {abl_cr:>6.4f}  {drop:>+7.4f}")
+        out["block_ablation"][name] = {"correct_rate": round(abl_cr, 4), "drop": round(drop, 4)}
+    return out
+
+
+# Two-probe cascade: column blocks of the Q+C+Quality+PQ+GP design matrix
+# (6 query one-hot | 6 corpus | 12 quality | 12 naive probe | 8 graph probe)
+PQGP_BLOCKS = {
+    "static (Q, C, Quality)": list(range(0, 24)),
+    "naive probe (PQ)":       list(range(24, 36)),
+    "graph probe (GP)":       list(range(36, 44)),
+}
+
+
+def run_ablation_pqgp(dataset_name: str, rows: list) -> dict:
+    """Leave-one-block-out ablation of the two-probe cascade (Q+C+Quality+PQ+GP),
+    under both the classifier (xgboost) and the expected-value (xgb_ev) rule."""
+    X_full = build_X(rows, "Q+C+Quality+PQ+GP")
+    assert X_full.shape[1] == 44, X_full.shape
+    out = {}
+    for rule_name, evaluator in (("xgboost", evaluate_X), ("xgb_ev", evaluate_X_ev)):
+        full_cr = evaluator(X_full, rows)
+        print(f"\n  Q+C+Quality+PQ+GP ({rule_name}), full model CR: {full_cr:.4f}")
+        block_out = {}
+        for name, cols in PQGP_BLOCKS.items():
+            X_abl = np.delete(X_full, cols, axis=1)
+            abl_cr = evaluator(X_abl, rows)
+            drop = full_cr - abl_cr
+            print(f"  drop {name:<24} {abl_cr:>6.4f}  {drop:>+7.4f}")
+            block_out[name] = {"correct_rate": round(abl_cr, 4), "drop": round(drop, 4)}
+        out[rule_name] = {"full_model_cr": round(full_cr, 4), "block_ablation": block_out}
+    return out
+
+
+# Retrieve-all + graph-probe: RA_BLOCKS extended with the GP block on the
+# Q+C+Quality+RA+GP design matrix (72-dim RA matrix + 8-dim GP at 72:80).
+RAGP_BLOCKS = dict(RA_BLOCKS)
+RAGP_BLOCKS["graph probe (GP)"] = list(range(72, 80))
+
+
+def run_ablation_ragp(dataset_name: str, rows: list) -> dict:
+    """Leave-one-block-out ablation of the retrieve-all + GP expected-value selector."""
+    X_full = build_X(rows, "Q+C+Quality+RA+GP")
+    assert X_full.shape[1] == 80, X_full.shape
+    full_cr = evaluate_X_ev(X_full, rows)
+    print(f"\n  Retrieve-all + GP selector (expected value), full model CR: {full_cr:.4f}")
+    out = {"full_model_cr": round(full_cr, 4), "block_ablation": {}}
+    for name, cols in RAGP_BLOCKS.items():
+        X_abl = np.delete(X_full, cols, axis=1)
+        abl_cr = evaluate_X_ev(X_abl, rows)
+        drop = full_cr - abl_cr
+        print(f"  drop {name:<32} {abl_cr:>6.4f}  {drop:>+7.4f}")
+        out["block_ablation"][name] = {"correct_rate": round(abl_cr, 4), "drop": round(drop, 4)}
+    return out
+
+
+def run_ablation(dataset_name: str) -> None:
+    print(f"\n{'#'*65}")
+    print(f"  Ablation Study: {dataset_name}")
+    print(f"{'#'*65}")
+
+    results_raw = load_retrieval_results(dataset_name)
+    rows = build_dataset(results_raw, dataset_name=dataset_name)
+
+    if len(rows) < 10:
+        print("  Not enough data.")
+        return
+
+    oracle_cr = correct_rate_oracle(rows)
+    print(f"  {len(rows)} instances  |  Oracle correct rate: {oracle_cr:.4f}")
+
+    # Full model baseline
+    print("\n  Running full Q+C+Quality+PQ model...")
+    X_full = build_X_full(rows)
+    full_cr = evaluate_X(X_full, rows)
+    print(f"  Full model correct rate: {full_cr:.4f}")
+
+    results = {
+        "dataset":        dataset_name,
+        "oracle_cr":      round(oracle_cr, 4),
+        "full_model_cr":  round(full_cr, 4),
+        "feature_ablation": {},
+        "group_ablation":   {},
+    }
+
+    # Per-feature ablation
+    print(f"\n  Per-feature ablation (drop one at a time):")
+    print(f"  {'Feature':<30} {'CR':>6}  {'Drop':>7}  {'Importance':>10}")
+    print("  " + "-" * 60)
+
+    for feat in PER_QUERY_FEATURE_NAMES:
+        X_abl = build_X_ablate_feature(rows, feat)
+        abl_cr = evaluate_X(X_abl, rows)
+        drop = full_cr - abl_cr
+        bar = "█" * max(0, int(drop * 300))
+        print(f"  {feat:<30} {abl_cr:>6.4f}  {drop:>+7.4f}  {bar}")
+        results["feature_ablation"][feat] = {
+            "correct_rate": round(abl_cr, 4),
+            "drop":         round(drop, 4),
+        }
+
+    # Group ablation
+    print(f"\n  Group ablation (drop one group at a time):")
+    print(f"  {'Group':<25} {'CR':>6}  {'Drop':>7}  {'Features'}")
+    print("  " + "-" * 70)
+
+    for group_name, feats in PQ_GROUPS.items():
+        X_abl = build_X_ablate_group(rows, feats)
+        abl_cr = evaluate_X(X_abl, rows)
+        drop = full_cr - abl_cr
+        bar = "█" * max(0, int(drop * 200))
+        print(f"  {group_name:<25} {abl_cr:>6.4f}  {drop:>+7.4f}  {bar}")
+        results["group_ablation"][group_name] = {
+            "features":     feats,
+            "correct_rate": round(abl_cr, 4),
+            "drop":         round(drop, 4),
+        }
+
+    # Retrieve-all selector block ablation (expected-value rule)
+    results["retrieve_all_selector"] = run_ablation_ra(dataset_name, rows)
+
+    # Two-probe cascade (Q+C+Quality+PQ+GP) block ablation, classifier + ev rule
+    results["pq_gp_block_ablation"] = run_ablation_pqgp(dataset_name, rows)
+
+    # Retrieve-all + graph-probe selector block ablation (expected-value rule)
+    results["retrieve_all_gp_selector"] = run_ablation_ragp(dataset_name, rows)
+
+    results["split"] = "grouped_by_query"
+
+    # Save
+    out_dir = Path(f"Dataset/EvaluationData/{ROUTER_OUT_ROOT}/{dataset_name}")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    with open(out_dir / "ablation.json", "w") as f:
+        json.dump(results, f, indent=2)
+    print(f"\n  Results saved -> {out_dir}/ablation.json")
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dataset", default="all")
+    args = parser.parse_args()
+
+    targets = ["quality", "musique"] if args.dataset == "all" else [args.dataset]
+    for name in targets:
+        run_ablation(name)
+
+
+if __name__ == "__main__":
+    main()
